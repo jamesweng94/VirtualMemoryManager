@@ -6,6 +6,8 @@ public class VMM {
 	BitMap map;
 	TLB tlb;
 	
+	boolean turnOnTLB = true;
+	
 	VMM(){
 		pm = new int [524288];
 		for(int i = 0; i < 524288; ++i) {
@@ -26,36 +28,30 @@ public class VMM {
 			if(s.hasNextLine()){
 				String firstLine = s.nextLine();
 				String[] firstTokens = firstLine.split(" ");
-				int t_size = firstTokens.length;
-				int index;
-				for(index = 0; index<t_size;) {
+				for(int index = 0; index < firstTokens.length; index+=2) {
 					int seg = Integer.parseInt(firstTokens[index]);
 					int addr = Integer.parseInt(firstTokens[index+1]);
 					if(!PTsetup(seg, addr)) {
-						System.out.println("PTsetup error");
+				//		System.out.print("err ");
 					}
-					index+=2;
 				}
 			}
 			
 			//Page Entry setup
 			if(s.hasNextLine()){
 				String secondLine = s.nextLine();
-				//System.out.println(secondLine);
 				String[] secondTokens = secondLine.split(" ");
-				int size = secondTokens.length;
-				int i;
-				for(i = 0; i < size;){
+				for(int i = 0; i < secondTokens.length; i+=3) {
 					int pageNum = Integer.parseInt(secondTokens[i]);
 					int segNum = Integer.parseInt(secondTokens[i + 1]);
 					int addrNum = Integer.parseInt(secondTokens[i+2]);
 					
 					if(!pageSetup(pageNum, segNum, addrNum)){
-						System.out.println("pageSetup error");
+					//	System.out.print("err ");
 					}
-					i+=3;
 				}
 			}
+		//	map.print();
 			
 		}
 		catch(IOException e)
@@ -66,11 +62,80 @@ public class VMM {
 		}
 	}
 	
+	public void parsingVA(String input2)
+	{
+		Scanner sc = null;
+		int output = 0;
+		
+		try {
+			sc = new Scanner(new FileReader(input2));
+			if(sc.hasNextLine())
+			{
+				String line = sc.nextLine();
+				String[] tokens = line.split(" ");
+				
+				for(int i = 0; i < tokens.length; i+=2) {
+					int op = Integer.parseInt(tokens[i]);
+					
+					//make sure integer is not overflow
+					long test = Long.parseLong(tokens[i + 1]);
+					if(test > Integer.MAX_VALUE || test < Integer.MIN_VALUE) {
+						System.out.print("err ");
+						continue;
+						}
+					
+					int va = Integer.parseInt(tokens[i + 1]);
+					int sp = getSP(va);
+					
+					int w = get_w(va);
+					int f = tlb.search(sp);
+										
+					if(!turnOnTLB) {
+						if(op == 0) {
+							read(va, turnOnTLB, output); 
+								}
+						if(op == 1) {
+							write(va, turnOnTLB, output); 
+								}
+							}
+					else {
+						if(f == -99) {				// Not in TLB(miss)
+							System.out.print("m ");
+							if(op == 0) {				
+								read(va, turnOnTLB, output);
+							}
+							if(op == 1) {	
+								write(va, turnOnTLB, output);
+							}
+						}
+						else {						//Found a hit
+							System.out.print("h ");
+							if(op == 0) {	
+								output = f + w;
+								System.out.print(output + " ");
+							}				
+							if(op == 1) {
+								output = f + w;
+								System.out.print(output + " ");							
+									}
+								tlb.updateFound(sp);
+							}
+						}
+					}
+				}
+			}	
+		catch(IOException e)
+		{
+			e.printStackTrace();
+			System.err.println("Error accessing the source file: \"" + input2);
+			System.exit(-2);
+		}
+	}
+	
 	public boolean PTsetup(int seg, int pt_addr) {
-	//	if(seg >=512 || pt_addr < 512) {
-	//		return false;
-	//	}
-	//	System.out.println("Seg: " + seg + ", addr: " + pt_addr);
+		if(seg >=512 || pt_addr < 512 && pt_addr != -1) {
+			return false;
+		}
 		pm[seg] = pt_addr;
 		if(pt_addr != -1) {
 			int frameNum = pt_addr / 512;
@@ -79,218 +144,94 @@ public class VMM {
 			map.setOne(bitIndex, frameNum);
 			map.setOne(bitIndex, frameNum + 1);
 		}
-	//	map.print();
 		return true;
 	}
 	
 	public boolean pageSetup(int page, int seg, int pg_addr){
-		//if(seg >=512 || pm[seg] + page < 512) {
-		//	return false;
-	//	}	
+		if(seg >=512 || pm[seg] + page < 512) {
+			return false;
+		}	
 		
 		pm[pm[seg] + page] = pg_addr;
 		if(pg_addr != -1) {
 			int frameNum = pg_addr / 512;		
 			int bitIndex = frameNum / 32;
 			frameNum = frameNum % 32;
-		//	System.out.println(frameNum + " " + bitIndex);
 			map.setOne(bitIndex, frameNum);
 		}
 		
 		return true;
 	}
 	
-	public void parsingVA(String input2)
-	{
-		Scanner sc = null;
-		int output;
+	public void read(int vir_addr, boolean withTLB, int output) {
+		int s = get_s(vir_addr);
+		int p = get_p(vir_addr);
+		int w = get_w(vir_addr);
 		
-		try {
-			sc = new Scanner(new FileReader(input2));
-			if(sc.hasNextLine())
-			{
-				String line = sc.nextLine();
-				String[] tokens = line.split(" ");
-				int size = tokens.length;
-				
-				for(int i = 0; i < size;) {
-					int op = Integer.parseInt(tokens[i]);
-					int va = Integer.parseInt(tokens[i + 1]);
-					int sp = getSP(va);
-					int w = get_w(va);
-					int f = tlb.search(sp);
-					
-//Without TLB
-/*
-						int s = get_s(va);
-					//	System.out.println("s: " + s);
-						int p = get_p(va);
-					//	System.out.println("p: " + p);
-						
-						//read operation
-						if(op == 0) {		
-						//	System.out.println("pm[s]: " + pm[s]);
-							if(pm[s] == -1 || pm[pm[s] + p] == -1) {
-								System.out.print("pf ");
-							}
-							else if(pm[s] == 0 || pm[pm[s] + p] == 0) {
-								System.out.print("err ");
-							}
-							else{
-							//	System.out.println("pm[s]: " + pm[s]);
-								output = pm[pm[s] + p]+ w;
-								System.out.print(output + " ");
-								
-							}
-						}
-						
-						//write operation
-						if(op == 1) {				
-							//allocating page table (1024 words)
-							if(pm[s] == 0) {
-								int w_i, w_j;
-								//map.print();
-								map.searchTwo();
-								w_i = map.get_i();
-								w_j = map.get_j();
-								pm[s] = w_i * 512 + w_j * 512;
-								map.setOne(w_i, w_j);
-								map.setOne(w_i, w_j+1);
-								
-								//allocating page(512 words)
-								if(pm[pm[s]] == 0) {
-									map.searchOne();
-									w_i = map.get_i();
-									w_j = map.get_j();
-									pm[pm[s]] = w_i * 512 + w_j * 512;
-									map.setOne(w_i, w_j);
-								}
-								pm[pm[pm[s]]] = w;
-								//System.out.println(pm[pm[s]]);
-								output = pm[pm[s]];
-								System.out.print(output + " ");
-							}
-							
-							else if(pm[s] == -1 || pm[pm[s] + p] == -1) {
-								System.out.print("pf ");
-							}
-							else {				
-								output = pm[pm[s] + p] + w;
-								System.out.print(output + " ");
-							}
-						}
-					i+=2;
-					
-					
-	*/			
-					
-//With TLB
-			//
-					// Not in TLB(miss)
-					if(f == -99){
-						System.out.print("m ");
-						int s = get_s(va);
-						//System.out.println("s: " + s);
-						int p = get_p(va);
-						//System.out.println("p: " + p);
-						
-						//read operation
-						if(op == 0) {				
-							if(pm[s] == -1 || pm[pm[s] + p] == -1) {
-								System.out.print("pf ");
-							}
-							else if(pm[s] == 0 || pm[pm[s] + p] == 0) {
-								System.out.print("err ");
-							}
-							else{
-								output = pm[pm[s] + p]+ w;
-								System.out.print(output + " ");	
-								tlb.updateNoFound(s + p, pm[pm[s] + p]);
-							}
-						}
-						
-						//write operation
-						if(op == 1) {	
-							//allocating page table (1024 words)
-							if(pm[s] == -1 || pm[pm[s] + p] == -1) {
-								System.out.print("pf ");
-							}		
-							else if(pm[s] == 0) {
-								int w_i, w_j;
-								//System.out.println("p[" + s+"]: "+ pm[s]);
-								//map.print();
-								map.searchTwo();
-								w_i = map.get_i();
-								w_j = map.get_j();
-								pm[s] = w_i * 512 + w_j * 512;
-								map.setOne(w_i, w_j);
-								map.setOne(w_i, w_j+1);
-								
-								//allocating page(512 words)
-								if(pm[pm[s] + p] == 0) {
-									map.searchOne();
-									w_i = map.get_i();
-									w_j = map.get_j();
-									
-									pm[pm[s]+ p] = w_i * 512 + w_j * 512;
-									map.setOne(w_i, w_j);
-								}
-								pm[pm[pm[s]]] = w;
-								output = pm[pm[s] + p] + w;
-								System.out.print(output + " ");
-								tlb.updateNoFound(s + p, pm[pm[s] + p]);
-							}
-							else if(pm[pm[s] + p] == 0) {
-								int w_i, w_j;
-								map.searchOne();
-								w_i = map.get_i();
-								w_j = map.get_j();
-								
-								pm[pm[s]+ p] = w_i * 512 + w_j * 512;
-								map.setOne(w_i, w_j);
-								pm[pm[pm[s]]] = w;
-								output = pm[pm[s] + p] + w;
-								System.out.print(output + " ");
-								tlb.updateNoFound(s + p, pm[pm[s] + p]);
-							}
-							else {		
-								//System.out.println("p[" + s+"]: "+ pm[s]);
-								output = pm[pm[s] + p] + w;
-								System.out.print(output + " ");
-								tlb.updateNoFound(s + p, pm[pm[s] + p]);
-							//	map.searchOne();
-							//	System.out.println(" i " + map.get_i() + " j: " + map.get_j());
-							}
-						}
-					}	//Found a hit
-					else {
-						System.out.print("h ");
-						if(op == 0) {	
-							tlb.updateFound(sp);
-							output = f + w;
-						//	System.out.println("\nf: "  + f);
-						//	System.out.println("w: "  + w);
-							System.out.print(output + " ");
-						}
-						
-						if(op == 1) {
-							tlb.updateFound(sp);
-							output = f + w;
-							System.out.print(output + " ");							
-						}
-					}
-			//		tlb.print();
-					i+=2;
-				//	*/
-				}
+		if(pm[s] == -1 || pm[pm[s] + p] == -1) {
+			System.out.print("pf ");
+		}
+		else if(pm[s] == 0 || pm[pm[s] + p] == 0) {
+			System.out.print("err ");
+		}
+		else{
+			output = pm[pm[s] + p]+ w;
+			System.out.print(output + " ");
+			if(withTLB) { tlb.updateNoFound(s + p, pm[pm[s] + p]);}
+		}
+	}
+	
+	public void write(int vir_addr, boolean withTLB, int output) {
+		int s = get_s(vir_addr);
+		int p = get_p(vir_addr);
+		int w = get_w(vir_addr);
+		
+		if(pm[s] == -1 || pm[pm[s] + p] == -1) {
+			System.out.print("pf ");
+		}		
+		else if(pm[s] == 0) {
+			pm[s] = allocatePT();
+
+			if(pm[pm[s] + p] == 0) {
+				pm[pm[s]+ p] = allocatePage();
 			}
+			
+			pm[pm[pm[s]]] = w;
+			output = pm[pm[s] + p] + w;
+			System.out.print(output + " ");
+			if(withTLB) { tlb.updateNoFound(s + p, pm[pm[s] + p]); }
 		}
-		catch(IOException e)
-		{
-			e.printStackTrace();
-			System.err.println("Error accessing the source file: \"" + input2);
-			System.exit(-2);
+		else if(pm[pm[s] + p] == 0) {
+			pm[pm[s]+ p] = allocatePage();		
+			output = pm[pm[s] + p] + w;
+			System.out.print(output + " ");
+			if(withTLB) { tlb.updateNoFound(s + p, pm[pm[s] + p]); }
 		}
+		else {		
+			output = pm[pm[s] + p] + w;
+			System.out.print(output + " ");
+			if(withTLB) { tlb.updateNoFound(s + p, pm[pm[s] + p]); }
+		}
+		
+	}
+	
+	int allocatePT() {
+		int w_i, w_j;
+		map.searchTwo();
+		w_i = map.get_i();
+		w_j = map.get_j();
+		map.setOne(w_i, w_j);
+		map.setOne(w_i, w_j+1);
+		return w_i * 512 + w_j * 512;
+	}
+	
+	int allocatePage() {
+		int w_i, w_j;
+		map.searchOne();
+		w_i = map.get_i();
+		w_j = map.get_j();
+		map.setOne(w_i, w_j);	
+		return w_i * 512 + w_j * 512;
 	}
 	
 	public int getSP(int va) {
